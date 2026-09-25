@@ -2,7 +2,7 @@
 status: complete
 audience: both
 chapter: 02
-last_updated: 2026-04
+last_updated: 2026-09
 contributors: [alexwill87, claude-cockpit]
 lang: fr
 ---
