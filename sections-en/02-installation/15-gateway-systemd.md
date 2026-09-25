@@ -105,11 +105,14 @@ SyslogIdentifier=openclaw-gateway
 # Security
 NoNewPrivileges=true
 ProtectSystem=strict
+PrivateTmp=true
 ReadWritePaths=/home/YOUR_USER
 
 [Install]
 WantedBy=multi-user.target
 ```
+
+> **Why `PrivateTmp=true`?** `ProtectSystem=strict` makes the entire filesystem read-only except for the paths listed in `ReadWritePaths`. Without `PrivateTmp=true`, `/tmp` stays read-only for the service: openclaw fails at startup with `Unable to create fallback OpenClaw temp dir: /tmp/openclaw-<uid>`. `PrivateTmp=true` gives the service its own isolated, writable `/tmp` without weakening `ProtectSystem=strict`. Only side effect: a process outside the service (run manually in a shell, outside systemd) won't see files the service writes to `/tmp` -- no impact here since the gateway communicates over TCP, not via a socket in `/tmp`.
 
 Create the wrapper script that loads nvm correctly (systemd does not load `.bashrc`):
 
@@ -121,12 +124,14 @@ if [ -f "$HOME/.nvm/nvm.sh" ]; then
   export NVM_DIR="$HOME/.nvm"
   source "$NVM_DIR/nvm.sh"
 fi
-exec openclaw gateway start
+exec openclaw gateway run
 SCRIPT
 $ chmod +x ~/scripts/openclaw-gateway.sh
 ```
 
 > **Why this detection?** If nvm is not installed (for example if node was installed via apt or another package manager), the script will crash on the `source` of a non-existent file. With this detection, the script works in both cases.
+
+> **Why `gateway run` and not `gateway start`?** `openclaw gateway start` is a *control* command: it delegates to the service manager (systemd/launchd/schtasks) and exits once the action is triggered -- it is not meant to stay in the foreground. With `Type=simple`, if the `ExecStart` process exits (even with `status=0`), systemd kills the whole cgroup and restarts the service. The new attempt then finds an "already running" state left over from the previous cycle and exits immediately -- an infinite restart loop with no explicit error in the logs. `openclaw gateway run` is the command that actually runs the gateway in the foreground, the one `Type=simple` expects.
 
 **IMPORTANT**: Replace the placeholders in the service file:
 - `YOUR_USER`: your username (result of `whoami`)
@@ -206,7 +211,9 @@ $ sudo systemctl start openclaw-gateway
 
 - **"openclaw: command not found"** in logs: systemd does not load `.bashrc`. You must use the ABSOLUTE path to node and openclaw. No `nvm`, no `~`.
 - **Permission denied**: The user in the service file does not have access to the folder. Check `User=` and `ReadWritePaths=`.
-- **Service looping (restart loop)**: Check the logs (`journalctl`). Often a problem with Vault token or database connection.
+- **"Unable to create fallback OpenClaw temp dir: /tmp/openclaw-<uid>"**: `ProtectSystem=strict` blocks writes to `/tmp`. Add `PrivateTmp=true` (see Step 1).
+- **Service looping (restart loop) with `Gateway service already running (pid ...)` in the logs, no explicit error**: the wrapper calls `openclaw gateway start` instead of `openclaw gateway run` -- `start` delegates and exits, which makes systemd think the service crashed. Check the last line of the script (see Step 1).
+- **Service looping with a real error in the logs**: Check the logs (`journalctl`). Often a problem with Vault token or database connection.
 - **"Start request repeated too quickly"**: The service crashed 5 times in 5 minutes. Fix the underlying problem, then `systemctl reset-failed`.
 
 ## Verification
